@@ -88,7 +88,7 @@ const homeBody = `
   </aside>
   <div class="wm-main">
     <p class="wm-strip"><b>${hl.total}</b> of video. ${hlSentence}</p>
-    <nav class="wm-crumbs" id="wm-crumbs" aria-label="Breadcrumb"></nav>
+    <div class="wm-bar"><nav class="wm-crumbs" id="wm-crumbs" aria-label="Breadcrumb"></nav><button type="button" class="wm-watch" id="wm-watch" data-watch="scope" hidden></button></div>
     <form class="wm-filters" id="wm-filters" aria-label="Map filters" onsubmit="return false">
       <div class="wm-pills" role="group" aria-label="Status">${statusPills.map((p) => `<button type="button" class="wm-pill" data-status="${p.key}" aria-pressed="false" title="${attr(p.title)}"><i class="wm-glyph" data-glyph="${p.key}"></i>${esc(p.label)} <span class="wm-pill__n">${pillCount(p.key)}</span></button>`).join("")}</div>
       <span class="wm-divider" aria-hidden="true"></span>
@@ -97,6 +97,7 @@ const homeBody = `
       <div class="wm-area-chips" id="wm-area-chips" role="group" aria-label="Area"></div>
       <span class="wm-count" id="wm-count" aria-live="polite"></span>
     </form>
+    <section class="wm-player" id="wm-player" aria-label="Video player" hidden></section>
     <div class="wm-stage" id="wm-stage">
       <div class="wm-mapbox" id="wm-mapbox" aria-busy="true"></div>
     </div>

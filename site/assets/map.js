@@ -77,7 +77,8 @@
     fj.features.forEach(function (f) {
       f.videos.forEach(function (fv) {
         var v = vidBy[fv.id]; if (!v) return;
-        v.nodes.push({ kind: "feature", key: f.slug + "@" + v.id, f: f, slug: f.slug, area: f.area, video: v, secs: fv.seconds > 0 ? fv.seconds : f.airtime_seconds, t: fv.t_start });
+        v.nodes.push({ kind: "feature", key: f.slug + "@" + v.id, f: f, slug: f.slug, area: f.area, video: v, secs: fv.seconds > 0 ? fv.seconds : f.airtime_seconds, t: fv.t_start,
+          ranges: fv.ranges && fv.ranges.length ? fv.ranges : [[fv.t_start, fv.t_end]], demo: fv.demo || null });
       });
     });
     areas.forEach(function (a) {
@@ -361,6 +362,7 @@
       root.querySelectorAll("[data-filter-area]").forEach(function (b) { var s = b.getAttribute("data-filter-area"); b.setAttribute("aria-pressed", String(filt.area === s)); b.classList.toggle("is-dim", !!filt.area && filt.area !== s); });
       renderMobile();
       updateSelection();
+      renderWatch();
     }
     function clearFilters() { filt = { status: [], dev: "", area: "", q: "" }; form.querySelector("input[name=q]").value = ""; applyFilters(); }
     form.addEventListener("click", function (ev) {
@@ -420,6 +422,7 @@
       panel.setAttribute("aria-labelledby", labelledBy);
       panel.hidden = false; root.classList.add("has-panel");
       if (wasOpen) { panel.style.animation = "none"; panel.scrollTop = 0; } else panel.style.animation = "";
+      renderWatch();
     }
     function renderPanel(focusClose) {
       if (view.level === "video") renderVideoPanel(focusClose);
@@ -432,6 +435,7 @@
       var h = [];
       h.push('<div class="wm-panel__head" style="--c:var(--area-' + a.slug + ')"><div><div class="wm-panel__area"><span class="wm-num">' + v.n + "</span>" + esc(a.name) + '</div><h2 id="wm-panel-title">' + esc(v.title) + '</h2></div><button type="button" class="wm-close" aria-label="Close the video, back to ' + esc(a.name) + '"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>');
       h.push('<div class="wm-meta"><span class="wm-mono">' + mmss(v.secs) + "</span><span class=\"wm-mono\">" + feats.length + (feats.length === 1 ? " feature" : " features") + "</span>" + chip(v.id, 0, v.title) + '<a class="wm-mono" href="' + base + "videos/" + v.id + '/">video page</a></div>');
+      h.push('<div class="wm-meta"><button type="button" class="wm-watch" data-watch="scope"></button></div>');
       if (!feats.length) h.push('<p class="wm-panel__summary">No features were extracted from this video yet. The video page has the chapters and the timeline.</p>');
       else {
         h.push('<p class="wm-eyebrow">Features, in order of appearance</p>');
@@ -468,6 +472,7 @@
       var h = [];
       h.push('<div class="wm-panel__head" style="--c:var(--area-' + f.area + ')"><div><div class="wm-panel__area"><span class="wm-swatch"></span>' + esc(areaName[f.area]) + '</div><h2 id="wm-panel-title">' + esc(f.name) + '</h2></div><button type="button" class="wm-close" aria-label="Close detail panel"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>');
       h.push('<div class="wm-meta"><span class="wm-status" data-glyph="' + sk + '" style="--c:var(--area-' + f.area + ')"><i class="wm-glyph" data-glyph="' + sk + '"></i>' + STATUS[sk] + '</span><span class="wm-mono">' + fmt(f.airtime_seconds) + ' of airtime</span><span class="wm-mono">dev relevance: ' + esc(f.dev_relevance) + "</span></div>");
+      h.push('<div class="wm-meta"><button type="button" class="wm-watch" data-watch="scope"></button><button type="button" class="wm-watch wm-watch--alt" data-watch="demo"></button></div>');
       h.push('<div class="wm-evidence"><p class="wm-eyebrow">The sentence that proves it</p>' + (ev && ev.quote ? "<p>“" + esc(ev.quote) + "”</p>" + chip(ev.video_id, ev.t, vt(ev.video_id)) : "<p>Nobody on stage said when it ships. GA by launch event convention, unless the docs say otherwise.</p>") + "</div>");
       if (f.summary) h.push('<p class="wm-panel__summary">' + esc(f.summary) + "</p>");
       if (f.quotes && f.quotes.length) h.push('<div class="wm-section"><p class="wm-eyebrow">Hear them say it</p>' + f.quotes.slice(0, 5).map(function (q) { return '<div class="wm-quote">' + chip(q.video_id, q.t, vt(q.video_id)) + "<span>" + esc(q.text) + "</span></div>"; }).join("") + "</div>");
@@ -495,6 +500,241 @@
       var n = n2.filter(function (d) { return d.slug === slug && d.tgt.op === 1; }).node();
       if (lastTrigger === "kb" && n) n.focus();
     }
+
+    // ---------- watch here: the active selection (and filters) as a queue of clips in an embedded YouTube player.
+    // A clip is one stretch of one video; overlapping feature ranges of a video merge into one clip, so nothing plays twice.
+    // Whole videos start a few seconds before their first feature. Chapters are the features inside a clip, highlighted while they play.
+    var PAD = 5, playOrder = [];
+    areas.forEach(function (a) { a.videos.forEach(function (v) { v.ord = playOrder.length; playOrder.push(v); }); });
+    var dock = document.getElementById("wm-player"), watchBtn = document.getElementById("wm-watch");
+    var pl = { q: null, i: 0, at: 0, yt: null, ready: false, booting: false, ch: -1, timer: null };
+    var ICON = {
+      prev: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3v10M13 3L6 8l7 5z"/></svg>',
+      next: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12 3v10M3 3l7 5-7 5z"/></svg>',
+      fs: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/></svg>',
+      close: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3l10 10M13 3L3 13"/></svg>'
+    };
+    dock.innerHTML = '<div class="wm-player__head"><div class="wm-player__info"><p class="wm-eyebrow" id="wm-player-label"></p><p class="wm-player__now" id="wm-player-now"></p></div>' +
+      '<div class="wm-player__ctrl"><button type="button" class="wm-icon" data-pl="prev" aria-label="Previous clip" title="Previous clip">' + ICON.prev + '</button><button type="button" class="wm-icon" data-pl="next" aria-label="Next clip" title="Next clip">' + ICON.next + "</button>" +
+      '<button type="button" class="wm-icon" data-pl="fs" aria-label="Full screen with the list" title="Full screen with the list" aria-pressed="false">' + ICON.fs + '</button><button type="button" class="wm-icon" data-pl="close" aria-label="Close the player" title="Close the player">' + ICON.close + "</button></div></div>" +
+      '<div class="wm-player__body"><div class="wm-player__screen" id="wm-player-screen"><div class="wm-player__msg" hidden></div></div><ol class="wm-queue" id="wm-queue" aria-label="Playlist"></ol></div>';
+    var screenEl = document.getElementById("wm-player-screen"), queueEl = document.getElementById("wm-queue"), msgEl = screenEl.querySelector(".wm-player__msg");
+    var fsBtn = dock.querySelector('[data-pl="fs"]');
+    function fsEl() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+    if (!(dock.requestFullscreen || dock.webkitRequestFullscreen)) fsBtn.hidden = true; // iPhone: the YouTube full screen button still works
+
+    function chaptersOf(v) { return v.nodes.filter(function (n) { return n.f; }).map(function (n) { return { t: n.t, key: n.key, f: n.f }; }).sort(function (x, y) { return x.t - y.t; }); }
+    function wholeClip(v, from) { var ch = chaptersOf(v); return { id: v.id, v: v, start: from != null ? from : ch.length ? Math.max(0, ch[0].t - PAD) : 0, end: null, chapters: ch }; }
+    // parts: { v, s, e, n } in play order of their videos; sorted by start inside a video, then merged where they touch
+    function rangeClips(parts) {
+      var vi = {}, out = [];
+      parts.forEach(function (p) { if (!(p.v.id in vi)) vi[p.v.id] = Object.keys(vi).length; });
+      parts.sort(function (x, y) { return vi[x.v.id] - vi[y.v.id] || x.s - y.s; });
+      parts.forEach(function (p) {
+        var last = out[out.length - 1], s = Math.max(0, p.s - PAD), ch = { t: p.s, key: p.n.key, f: p.n.f };
+        if (last && last.id === p.v.id && s <= last.end) {
+          last.end = Math.max(last.end, p.e);
+          if (!last.chapters.some(function (c) { return c.key === ch.key; })) last.chapters.push(ch);
+        } else out.push({ id: p.v.id, v: p.v, start: s, end: p.e, chapters: [ch] });
+      });
+      return out;
+    }
+    // mode "scope": what is selected; "demo": the demo ranges of the selected feature
+    function queueFor(mode) {
+      var parts = [];
+      if (view.level === "feature") {
+        var f = bySlug[view.slug];
+        ring2.filter(function (d) { return d.slug === view.slug; })
+          .sort(function (x, y) { return (y.video.id === view.video) - (x.video.id === view.video) || x.video.ord - y.video.ord; })
+          .forEach(function (n) {
+            if (mode === "demo") { if (n.demo) parts.push({ v: n.video, s: n.demo.t_start, e: n.demo.t_end, n: n }); }
+            else n.ranges.forEach(function (r) { parts.push({ v: n.video, s: r[0], e: r[1], n: n }); });
+          });
+        return { clips: rangeClips(parts), label: (mode === "demo" ? "Demo: " : "") + f.name, sig: mode + "|" + f.slug };
+      }
+      if (mode === "demo") return { clips: [], label: "", sig: "" };
+      var vids = view.video ? [vidBy[view.video]] : view.level === "area" ? areaBy[view.area].videos : playOrder;
+      var scope = view.video ? vids[0].title : view.level === "area" ? areaBy[view.area].name : "All " + vids.length + " videos";
+      if (!anyFilter()) return { clips: vids.map(function (v) { return wholeClip(v); }), label: scope, sig: "scope|" + hashOf(view) };
+      vids.forEach(function (v) { v.nodes.forEach(function (n) { if (n.f && matches(n)) n.ranges.forEach(function (r) { parts.push({ v: v, s: r[0], e: r[1], n: n }); }); }); });
+      return { clips: rangeClips(parts), label: scope + ", filtered", sig: "scope|" + hashOf(view) + "|" + JSON.stringify(filt) };
+    }
+    function clipEnd(c) { return c.end != null ? c.end : c.v.secs; }
+    function describe(q) {
+      var secs = q.clips.reduce(function (t, c) { return t + clipEnd(c) - c.start; }, 0), whole = q.clips.every(function (c) { return c.end == null; });
+      var n = q.clips.length, unit = whole ? (n === 1 ? " video" : " videos") : (n === 1 ? " clip" : " clips");
+      return n + unit + " · " + mmss(secs);
+    }
+    function renderWatch() {
+      var q = queueFor("scope"), on = !!pl.q;
+      [watchBtn].concat([].slice.call(panel.querySelectorAll("[data-watch]"))).forEach(function (b) {
+        var m = b.getAttribute("data-watch"), bq = m === "scope" ? q : queueFor(m), same = on && pl.q.sig === bq.sig;
+        var text = same ? "Playing here" : m === "demo" ? (on ? "Play the demo instead" : "Watch the demo") : on ? "Play this instead" : "Watch here";
+        b.hidden = !bq.clips.length;
+        b.classList.toggle("is-playing", same);
+        b.innerHTML = PLAY + "<span>" + text + '</span><span class="wm-watch__n">' + esc(bq.clips.length ? describe(bq) : "") + "</span>";
+        b.title = (same ? "Now playing: " : "Play on this page: ") + bq.label;
+      });
+    }
+
+    function loadApi() {
+      if (loadApi.p) return loadApi.p;
+      loadApi.p = new Promise(function (res, rej) {
+        if (window.YT && window.YT.Player) { res(); return; }
+        var prev = window.onYouTubeIframeAPIReady;
+        window.onYouTubeIframeAPIReady = function () { if (prev) prev(); res(); };
+        var s = document.createElement("script");
+        s.src = "https://www.youtube.com/iframe_api";
+        s.onerror = function () { loadApi.p = null; rej(new Error("YouTube player did not load")); };
+        document.head.appendChild(s);
+      });
+      return loadApi.p;
+    }
+    function start(q) {
+      if (!q.clips.length) return;
+      if (pl.q && pl.q.sig === q.sig) { reveal(); return; }
+      pl.q = q;
+      document.getElementById("wm-player-label").textContent = "Watching here · " + q.label + " · " + describe(q);
+      dock.hidden = false;
+      renderQueue();
+      load(0);
+      renderWatch();
+      reveal();
+      if (!pl.timer) pl.timer = setInterval(tick, 500);
+    }
+    function reveal() {
+      var r = dock.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) dock.scrollIntoView({ block: "start", behavior: reduced ? "auto" : "smooth" });
+    }
+    function load(i, at) {
+      var c = pl.q.clips[i];
+      pl.i = i; pl.at = at != null ? at : c.start; pl.ch = -1;
+      msgEl.hidden = true;
+      renderNow();
+      if (pl.ready) pl.yt.loadVideoById({ videoId: c.id, startSeconds: pl.at, endSeconds: c.end != null ? c.end : undefined });
+      else if (!pl.booting) boot();
+    }
+    // the iframe is built here (not by the API) so it carries autoplay and fullscreen permissions and the no-cookie host
+    function boot() {
+      pl.booting = true;
+      loadApi().then(function () {
+        if (!pl.q) { pl.booting = false; return; }
+        var c = pl.q.clips[pl.i], at = pl.at, fr = document.createElement("iframe");
+        fr.src = "https://www.youtube-nocookie.com/embed/" + c.id + "?enablejsapi=1&autoplay=1&playsinline=1&rel=0&start=" + Math.floor(at) + (c.end != null ? "&end=" + Math.ceil(c.end) : "") + "&origin=" + encodeURIComponent(location.origin);
+        fr.title = "YouTube video player";
+        fr.setAttribute("allow", "autoplay; encrypted-media; picture-in-picture; fullscreen");
+        fr.setAttribute("allowfullscreen", "");
+        fr.setAttribute("referrerpolicy", "strict-origin-when-cross-origin");
+        screenEl.insertBefore(fr, msgEl);
+        pl.yt = new window.YT.Player(fr, { events: {
+          onReady: function () {
+            pl.ready = true; pl.booting = false;
+            var now = pl.q && pl.q.clips[pl.i];
+            if (now && (now.id !== c.id || pl.at !== at)) load(pl.i, pl.at); // the selection moved on while the player booted
+          },
+          onStateChange: function (e) { if (e.data === 0 && pl.q) { if (pl.i < pl.q.clips.length - 1) load(pl.i + 1); else renderNow(true); } },
+          onError: function (e) {
+            var c2 = pl.q && pl.q.clips[pl.i]; if (!c2) return;
+            msgEl.innerHTML = "<p>This clip does not play here (YouTube error " + esc(e.data) + ').</p><p><a href="' + yt(c2.id, pl.at) + '" target="_blank" rel="noopener">Open it on YouTube</a> or skip to the next clip.</p>';
+            msgEl.hidden = false;
+          }
+        } });
+      }, function (e) {
+        pl.booting = false;
+        msgEl.innerHTML = "<p>" + esc(e.message) + '. <a href="' + yt(pl.q.clips[pl.i].id, pl.at) + '" target="_blank" rel="noopener">Open it on YouTube</a>.</p>';
+        msgEl.hidden = false;
+      });
+    }
+    function closePlayer() {
+      if (fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      if (pl.yt) { try { pl.yt.destroy(); } catch (e) { /* already gone */ } pl.yt = null; pl.ready = false; pl.booting = false; }
+      [].slice.call(screenEl.querySelectorAll("iframe")).forEach(function (fr) { fr.remove(); });
+      clearInterval(pl.timer); pl.timer = null;
+      pl.q = null; dock.hidden = true; queueEl.innerHTML = "";
+      setHover(null, true);
+      renderWatch();
+      watchBtn.focus();
+    }
+    // jump to a clip (and a second inside it) without reloading when it is the clip already playing
+    function jump(i, t) {
+      if (i === pl.i && pl.ready && t != null) { pl.yt.seekTo(t, true); pl.yt.playVideo(); pl.ch = -1; tick(); }
+      else load(i, t);
+    }
+    // a timestamp link elsewhere on the map: play it in the queue when it is inside a clip, else insert it after the current clip
+    function playAt(id, t) {
+      var i = -1;
+      pl.q.clips.forEach(function (c, k) { if (i < 0 && c.id === id && t >= c.start && t < clipEnd(c)) i = k; });
+      if (i < 0) { pl.q.clips.splice(pl.i + 1, 0, wholeClip(vidBy[id], t)); i = pl.i + 1; renderQueue(); }
+      jump(i, t);
+      reveal();
+    }
+
+    function renderQueue() {
+      queueEl.innerHTML = pl.q.clips.map(function (c, i) {
+        return '<li class="wm-qclip" data-i="' + i + '" style="--c:var(--area-' + c.v.area + ')">' +
+          '<button type="button" class="wm-qclip__head" data-go="' + i + '"><img src="https://i.ytimg.com/vi/' + c.id + '/mqdefault.jpg" alt="" loading="lazy" width="64" height="36"><span><b>' + esc(c.v.title) + '</b><span class="wm-mono">' + mmss(c.start) + " – " + mmss(clipEnd(c)) + (c.chapters.length ? " · " + c.chapters.length + (c.chapters.length === 1 ? " feature" : " features") : "") + "</span></span></button>" +
+          (c.chapters.length ? '<ol class="wm-qch">' + c.chapters.map(function (ch, k) {
+            var sk = statusKey(ch.f);
+            return '<li class="wm-qrow" data-key="' + esc(ch.key) + '" data-k="' + k + '" style="--c:var(--area-' + ch.f.area + ')"><button type="button" class="wm-qrow__go" data-go="' + i + '" data-t="' + ch.t + '"><span class="wm-qrow__name"><i class="wm-glyph" data-glyph="' + sk + '"></i>' + esc(ch.f.name) + '</span><span class="wm-mono">' + mmss(ch.t) + " · " + STATUS[sk] + (ch.f.dev_relevance === "high" ? " · dev: high" : "") + '</span><span class="wm-qrow__sum">' + esc(ch.f.summary) + "</span></button>" +
+              '<a class="wm-qrow__more" href="#/v/' + c.id + "/f/" + esc(ch.f.slug) + '" title="Open the detail of this feature">detail</a></li>';
+          }).join("") + "</ol>" : "") + "</li>";
+      }).join("");
+    }
+    function renderNow(done) {
+      if (!pl.q) return;
+      var c = pl.q.clips[pl.i], ch = pl.ch >= 0 ? c.chapters[pl.ch] : null;
+      document.getElementById("wm-player-now").innerHTML = done ? "<b>End of the list.</b>" : '<span class="wm-mono">' + (pl.i + 1) + " / " + pl.q.clips.length + "</span> <b>" + esc(c.v.title) + "</b>" + (ch ? " · " + esc(ch.f.name) : "");
+      dock.querySelector('[data-pl="prev"]').disabled = pl.i === 0;
+      dock.querySelector('[data-pl="next"]').disabled = pl.i >= pl.q.clips.length - 1;
+      queueEl.querySelectorAll(".wm-qclip").forEach(function (li) {
+        var cur = +li.getAttribute("data-i") === pl.i;
+        li.classList.toggle("is-current", cur);
+        li.querySelectorAll(".wm-qrow").forEach(function (r) { r.classList.toggle("is-current", cur && +r.getAttribute("data-k") === pl.ch); });
+      });
+      var row = queueEl.querySelector(".wm-qrow.is-current") || queueEl.querySelector(".wm-qclip.is-current .wm-qclip__head");
+      if (row && queueEl.scrollHeight > queueEl.clientHeight) { // keep the playing row in view inside the list, never scroll the page
+        var top = row.offsetTop - queueEl.offsetTop, bottom = top + row.offsetHeight;
+        if (top < queueEl.scrollTop || bottom > queueEl.scrollTop + queueEl.clientHeight) queueEl.scrollTop = Math.max(0, top - 8);
+      }
+    }
+    // twice a second: which chapter of the clip is on screen
+    function tick() {
+      if (!pl.q || !pl.ready) return;
+      var c = pl.q.clips[pl.i], d = pl.yt.getVideoData ? pl.yt.getVideoData() : null;
+      if (!d || d.video_id !== c.id) return;
+      var t = pl.yt.getCurrentTime() || 0, k = -1;
+      c.chapters.forEach(function (ch, j) { if (ch.t <= t + 0.5) k = j; });
+      if (k !== pl.ch) { pl.ch = k; renderNow(); }
+    }
+
+    dock.addEventListener("click", function (ev) {
+      if (ev.target.closest(".wm-qrow__more") && fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document); // the detail panel lives outside the dock
+      var b = ev.target.closest("[data-pl],[data-go]"); if (!b) return;
+      var a = b.getAttribute("data-pl");
+      if (a === "close") closePlayer();
+      else if (a === "prev" && pl.i > 0) load(pl.i - 1);
+      else if (a === "next" && pl.i < pl.q.clips.length - 1) load(pl.i + 1);
+      else if (a === "fs") { if (fsEl()) (document.exitFullscreen || document.webkitExitFullscreen).call(document); else (dock.requestFullscreen || dock.webkitRequestFullscreen).call(dock); }
+      else if (b.hasAttribute("data-go")) {
+        var i = +b.getAttribute("data-go"), t = b.hasAttribute("data-t") ? Math.max(pl.q.clips[i].start, +b.getAttribute("data-t") - 2) : null;
+        jump(i, t);
+      }
+    });
+    ["fullscreenchange", "webkitfullscreenchange"].forEach(function (n) { document.addEventListener(n, function () { var on = fsEl() === dock; dock.classList.toggle("is-fs", on); fsBtn.setAttribute("aria-pressed", String(on)); }); });
+    // hovering a playlist row lights its arc on the map and opens its summary, like the rows of the video panel
+    queueEl.addEventListener("mouseover", function (ev) { var r = ev.target.closest(".wm-qrow"), d = r ? nodeByKey[r.getAttribute("data-key")] : null; if ((d ? d.key : null) !== hoverKey) setHover(d, true); });
+    queueEl.addEventListener("mouseleave", function () { setHover(null, true); });
+    root.addEventListener("click", function (ev) {
+      var w = ev.target.closest("[data-watch]");
+      if (w) { start(queueFor(w.getAttribute("data-watch"))); return; }
+      if (!pl.q || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button) return;
+      var a = ev.target.closest('a[href^="https://www.youtube.com/watch"]');
+      if (!a || dock.contains(a)) return;
+      var u = new URL(a.href), id = u.searchParams.get("v");
+      if (!vidBy[id]) return;
+      ev.preventDefault();
+      playAt(id, parseInt(u.searchParams.get("t"), 10) || 0);
+    });
 
     // ---------- mobile list (under the tablet breakpoint; no sunburst)
     function donut(a) {
@@ -572,7 +812,7 @@
       root.setAttribute("data-level", st.level); svg.attr("data-level", st.level);
       n2.attr("href", function (d) { return d.kind === "ghost" ? base + "videos/" + d.video.id + "/" : st.video ? "#/v/" + d.video.id + "/f/" + d.slug : "#/f/" + d.slug; });
       if (windowChanged) zoomTo(st, true); else drawOutline();
-      updateSelection(); renderCrumbs(); renderVideos(); renderPanel(kb && st.level !== "area" && st.level !== "wave"); renderMobile();
+      updateSelection(); renderCrumbs(); renderVideos(); renderPanel(kb && st.level !== "area" && st.level !== "wave"); renderMobile(); renderWatch();
       if (!moving) decorate();
     }
     window.addEventListener("popstate", function () { apply(parse()); });
