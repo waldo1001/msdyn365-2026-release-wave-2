@@ -2,6 +2,7 @@
  * Static site generator. Reads data/ and writes site/dist/. No framework.
  *   SITE_BASE   sub-path the site is served from (default from package name)
  *   SITE_ORIGIN origin for canonical and og URLs (default https://waldo1001.github.io)
+ *   GOATCOUNTER_CODE  GoatCounter site code; unset builds the site without analytics
  */
 import { rmSync, mkdirSync, cpSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -18,10 +19,12 @@ const base = (process.env.SITE_BASE ?? `/${pkg.name}/`).replace(/\/?$/, "/");
 const origin = (process.env.SITE_ORIGIN ?? "https://waldo1001.github.io").replace(/\/$/, "");
 const DIST = resolve(ROOT, "site", "dist");
 const pub = isPublicBuild();
+const goatcounter = (process.env.GOATCOUNTER_CODE ?? "").trim();
+if (goatcounter && !/^[a-z0-9-]+$/.test(goatcounter)) throw new Error(`GOATCOUNTER_CODE must be a GoatCounter site code (a-z, 0-9, -), got "${goatcounter}"`);
 const waveDef = cfg.waves[wave];
 const audiences: any[] = readJson<any>(resolve(ROOT, "config", "audiences.json")).audiences;
 const ctx: SiteCtx = {
-  base, origin, waveName: waveDef.name, waveId: wave, repoUrl: `https://github.com/waldo1001/${pkg.name}`, pub, areas: cfg.areas,
+  base, origin, waveName: waveDef.name, waveId: wave, repoUrl: `https://github.com/waldo1001/${pkg.name}`, pub, goatcounter, areas: cfg.areas,
   nav: [{ href: "", label: "Map" }, { href: "videos/", label: "Videos" }, { href: "features/", label: "Features" }, { href: "airtime/", label: "Airtime" }, { href: "digests/", label: "Digests", children: [...audiences.map((a) => ({ href: `digests/${a.slug}/`, label: a.nav })), { href: "digests/", label: "All digests" }] }, { href: "what-they-didnt-say/", label: "Gaps" }, { href: "bingo/", label: "Bingo" }, { href: "ask/", label: "Ask" }, { href: "about/", label: "About" }],
 };
 const fj = readJson<any>(resolve(DATA, "index", "features.json"));
@@ -242,7 +245,7 @@ write("about", page({ title: "About", description: "What this unofficial map of 
 <p>This is an unofficial map of the <strong>${esc(waveDef.event)}</strong>: ${videos.length} videos Microsoft published on ${esc(waveDef.event_date)} on the <a href="${esc(waveDef.channel)}" rel="noopener">Dynamics 365 Business Central YouTube channel</a>. It was built by <a href="https://www.waldo.be" rel="noopener">waldo</a> (Eric Wauters, Business Central MVP) because seven hours of launch video is a lot, and because a release should be navigable by humans and by LLM agents alike.</p>
 <h2>How it was built</h2><p>The YouTube auto-captions were cleaned into timestamped segments. Claude extracted, per video, a summary, chapters, features with the sentence that proves their status, quotes (validated against the transcript, dropped when not found), and disclaimer moments. Features were merged across videos, matched against Microsoft's documented features for the wave, and everything was rendered as markdown with frontmatter and as this site. The whole pipeline, the cache that makes it reproducible, and the data are in the <a href="${ctx.repoUrl}">repository</a>. Point an LLM at its <code>AGENTS.md</code>.</p>
 <h2>Limitations</h2><ul><li>Auto-captions: names of presenters and products are sometimes wrong (the captions write "co-pilot", "EL query", "shop a fight").</li><li>Status follows the launch event rule: a feature shows as GA unless the presenters said otherwise. Where nothing was said, the feature page says so and the docs column tells you what Microsoft wrote; the data keeps the distinction as <code>status_source</code>.</li><li>Feature boundaries and airtime come from a language model reading the transcript; they are approximations, not measurements.</li><li>The docs matching is done by a language model with keyword candidates and reviewed by hand over time, see <code>data/release-plan/overrides.json</code>.</li><li>Docs checked on <strong>${esc(docsChecked)}</strong>. "Not documented" means not on Microsoft's what's new pages for the wave on that date. Microsoft keeps filling the documentation after the launch event, and a feature can be described in the product documentation without its own what's new item, so these conclusions age. The date is <code>release_plan.fetched_at</code> in the data.</li>${missingVideos.length ? `<li>${missingVideos.length} video(s) have no transcript yet: ${missingVideos.map((v: any) => esc(v.title)).join(", ")}.</li>` : ""}</ul>
-<h2>Privacy</h2><p>No cookies, no analytics, no external requests except YouTube links and thumbnails. The optional API key on the Ask page stays in your browser.</p>
+<h2>Privacy</h2><p>${goatcounter ? `No cookies. Visits are counted with <a href="https://www.goatcounter.com" rel="noopener">GoatCounter</a>, which sets no cookies and stores no personal data: the page, the referrer, browser and screen size, and the country. It also counts searches on the Ask page and clicks on YouTube timestamps, so I can see which features people look for. No other external requests except YouTube links and thumbnails.` : "No cookies, no analytics, no external requests except YouTube links and thumbnails."} The optional API key on the Ask page stays in your browser.</p>
 ${renderMarkdown(notice.replace(/^# .*\n/, "## Content notice\n"), ctx)}
 </div>` }));
 

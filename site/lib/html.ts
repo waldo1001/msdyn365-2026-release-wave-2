@@ -12,6 +12,7 @@ export interface SiteCtx {
   waveId: string;
   repoUrl: string;
   pub: boolean;
+  goatcounter: string;   // GoatCounter site code; "" builds the site without analytics
   areas: { slug: string; name: string }[];
   nav: { href: string; label: string; children?: { href: string; label: string }[] }[];
 }
@@ -44,6 +45,7 @@ export function layout(ctx: SiteCtx, opts: { title: string; description: string;
 <link rel="stylesheet" href="${ctx.base}assets/tokens.css">
 <link rel="stylesheet" href="${ctx.base}assets/site.css">
 <script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t);}catch(e){}</script>
+${ctx.goatcounter ? `<script data-goatcounter="https://${ctx.goatcounter}.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>` : ""}
 ${opts.head ?? ""}
 </head>
 <body>
@@ -61,9 +63,10 @@ ${opts.body}
 <footer class="bottom"><div class="wrap">
   <p>Unofficial. Built by <a href="https://www.waldo.be" rel="noopener">waldo</a> from the public YouTube auto-captions of Microsoft's launch event videos. Not affiliated with Microsoft. Every claim links to a video and a second; the video is the source.</p>
   <p class="status-note" id="status-note"><b>About the GA label.</b> A feature is shown as GA unless the presenters said otherwise; that is how Microsoft runs the launch event, and it is the rule here. Where they said preview or "later", the badge says so. The docs column shows what Microsoft wrote, and the data keeps the distinction as <code>status_source</code>.</p>
-  <p><a href="${ctx.repoUrl}" rel="noopener">Repository</a> · <a href="${ctx.base}about/">About and content notice</a> · <a href="${ctx.base}llms.txt">llms.txt</a> · No cookies, no analytics, no external requests except YouTube.</p>
+  <p><a href="${ctx.repoUrl}" rel="noopener">Repository</a> · <a href="${ctx.base}about/">About and content notice</a> · <a href="${ctx.base}llms.txt">llms.txt</a> · ${ctx.goatcounter ? `No cookies. Cookieless visit counts with <a href="https://www.goatcounter.com" rel="noopener">GoatCounter</a>; no other external requests except YouTube.` : "No cookies, no analytics, no external requests except YouTube."}</p>
 </div></footer>
 <script src="${ctx.base}assets/theme.js" defer></script>
+${ctx.goatcounter ? `<script src="${ctx.base}assets/analytics.js" defer></script>` : ""}
 ${(opts.scripts ?? []).map((s) => `<script src="${ctx.base}assets/${s}" defer></script>`).join("\n")}
 </body>
 </html>
