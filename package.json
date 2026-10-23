@@ -5,7 +5,7 @@
   "description": "Unofficial, LLM-navigable map of the Business Central 2026 release wave 2 launch event",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "^22.23.4 || ^24.22.1 || >=26.12.1"
   },
   "scripts": {
     "step:01": "tsx pipeline/01-clean-vtt/index.ts",
